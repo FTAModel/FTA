@@ -25,7 +25,7 @@ def get_args(argv):
     au = 100.0
     al = -200.0
     outfile = 'fta_model_au_al'
-    indir = 'inputs'
+    indir = 'inputs_aual'
     minal = al
     maxal = al
     dal = 50.0
