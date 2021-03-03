@@ -618,7 +618,6 @@ def read_fre_data(NoaaFile):
 
     mlts2d, lats2d = np.meshgrid(mlts, lats)
 
-    values = np.zeros((nIndices, nLats, nMlts+1))
     fre = {'mlts' : mlts2d, 'mlats' : lats2d}
 
     for var in Vars:
