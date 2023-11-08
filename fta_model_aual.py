@@ -510,18 +510,43 @@ def calculate_hemispheric_power(mlats, mlts, eflux):
 
     return hp
 
+def limit_aual(au,al):
+
+
+    if al > -25:
+        al1 = -25
+    elif al < -1200:
+        al1 = -1200
+    else:
+        al1 = al
+
+    au1 = au
+    if au1 < 25:
+        au1 = 25
+    if au1 < 0.12 * abs(al1):
+        au1 = 0.12 * abs(al1)
+
+    if au1 > 400:
+        au1 = 400
+
+    return au1,al1
+
 #-----------------------------------------------------------------------------
 #
 #-----------------------------------------------------------------------------
 
 def load_fta_aual_csv(au,al,outfile):
 
+    # limit au&al
+    au_tmp,al_tmp = limit_aual(au,al)
+    print('au&al limited to:', au_tmp,al_tmp)
+
     bandtype='lbhl'
-    mlts0,mlats0,efs0 = get_factors_iaual_csv(au,al,bandtype,500)
+    mlts0,mlats0,efs0 = get_factors_iaual_csv(au_tmp,al_tmp,bandtype,500)
     mlts,mlats,lbhl_inp = interp_model(mlts0,mlats0,efs0)
 
     bandtype='lbhs'
-    mlts0,mlats0,efs0 = get_factors_iaual_csv(au,al,bandtype,500)
+    mlts0,mlats0,efs0 = get_factors_iaual_csv(au_tmp,al_tmp,bandtype,500)
     mlts,mlats,lbhs_inp = interp_model(mlts0,mlats0,efs0)
 
     eflux = lbhl_inp/110.0
@@ -684,7 +709,7 @@ if __name__ == '__main__':
     if (args["help"]):
 
         print('Usage : ')
-        print('fta_model_aual2.py -au=au -al=al -outfile=outfile.png')
+        print('fta_model_aual.py -au=au -al=al -outfile=outfile.png')
         print('   -help : print this message')
         print('   -au= upper auroral index (between 0 - 300 nT)')
         print('   -al= lower auroral index (below 0, ~0 -> -1000 nT)')
