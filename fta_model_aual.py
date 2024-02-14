@@ -197,9 +197,9 @@ def general_polar_plot(mlts2d, mlats2d, values, ax, mini, maxi, cmap):
 
     # Do we need to wrap around in MLT?
     if (mlts2d[-1,0] % 24 != 0.0):
-        theta = np.concatenate((theta,theta[:,0:1]), axis = 1)
-        values = np.concatenate((values, values[:,0:1]), axis= 1)
-        rad = np.concatenate((rad,rad[:,0:1]), axis= 1)
+        theta = np.concatenate((theta,theta[0:1,:]), axis = 0)
+        values = np.concatenate((values, values[0:1,:]), axis= 0)
+        rad = np.concatenate((rad,rad[0:1,:]), axis= 0)
 
     nLevels = 31
     hs = ax.contourf(theta, rad, values, nLevels,
