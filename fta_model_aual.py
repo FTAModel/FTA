@@ -15,7 +15,7 @@ import sys
 BinMLT=0.25
 
 #-----------------------------------------------------------------------------
-# 
+#
 #-----------------------------------------------------------------------------
 
 def get_args(argv):
@@ -31,7 +31,7 @@ def get_args(argv):
     dal = 50.0
     noaafile = 'hpke.noaa'
     hp = 50.0
-    
+
     for arg in argv:
 
         IsFound = 0
@@ -93,7 +93,7 @@ def get_args(argv):
             if m:
                 help = 1
                 IsFound = 1
-                
+
             m = re.match(r'-fre',arg)
             if m:
                 fre = 1
@@ -103,7 +103,7 @@ def get_args(argv):
         temp = minal
         minal = maxal
         maxal = temp
-        
+
     args = {'au': au,
             'minal':minal,
             'maxal':maxal,
@@ -119,7 +119,7 @@ def get_args(argv):
     return args
 
 #-----------------------------------------------------------------------------
-# 
+#
 #-----------------------------------------------------------------------------
 
 def interp_model(mlts0,mlats0,efs0):
@@ -164,7 +164,7 @@ def interp_model(mlts0,mlats0,efs0):
     return mlts,mlats,efs
 
 #-----------------------------------------------------------------------------
-# 
+#
 #-----------------------------------------------------------------------------
 
 def cal_avee(efs_lbhl,efs_lbhs):
@@ -197,9 +197,9 @@ def general_polar_plot(mlts2d, mlats2d, values, ax, mini, maxi, cmap):
 
     # Do we need to wrap around in MLT?
     if (mlts2d[-1,0] % 24 != 0.0):
-        theta = np.concatenate((theta,theta[0:1:]), axis = 0)
-        values = np.concatenate((values, value[0:1, :]), axis=0)
-        rad = np.concatenate((rad,rad[0:1, :]), axis=0)
+        theta = np.concatenate((theta,theta[0:1,:]), axis = 0)
+        values = np.concatenate((values, values[0:1,:]), axis= 0)
+        rad = np.concatenate((rad,rad[0:1,:]), axis= 0)
 
     nLevels = 31
     hs = ax.contourf(theta, rad, values, nLevels,
@@ -217,7 +217,7 @@ def general_polar_plot(mlts2d, mlats2d, values, ax, mini, maxi, cmap):
     ax.grid(True,linestyle='--')
 
     return
-    
+
 #-----------------------------------------------------------------------------
 # General Plotting for Cartesian Grids
 #-----------------------------------------------------------------------------
@@ -242,7 +242,7 @@ def general_cart_plot(mlts2d, mlats2d, values, ax, mini, maxi, cmap):
     ax.set_ylabel('MLat (Deg)')
 
     return
-    
+
 #-----------------------------------------------------------------------------
 # plot eflux and avee in both cartesian and polar coordinates
 #-----------------------------------------------------------------------------
@@ -252,14 +252,14 @@ def plot2x2(mlts2d, mlats2d, eFlux, AveE, outfile):
     #au = inputs['au']
     #al = inputs['au']
     #hp = inputs['hp']
-    
+
     plt.style.use('default')
     cmap = mpl.cm.get_cmap("inferno")
     fig1 = plt.figure(1)
     gs1 = fig1.add_gridspec(2,2)
     plt.subplots_adjust(wspace = 0.08,hspace = 0.15)
     cmap = mpl.cm.get_cmap("inferno")
-    
+
     # EFlux First:
 
     mini = 0
@@ -275,7 +275,7 @@ def plot2x2(mlts2d, mlats2d, eFlux, AveE, outfile):
     #    transform=ax.transAxes,
     #    color='cyan',
     #    fontsize=8)
-    hp = calculate_hemispheric_power(mlats2d, mlts2d, eFlux) 
+    hp = calculate_hemispheric_power(mlats2d, mlts2d, eFlux)
     ax.text(0.1,0.9, (
         'HP: {:3d} GW'.format(int(hp))),
         transform=ax.transAxes,
@@ -314,9 +314,9 @@ def plot2x2(mlts2d, mlats2d, eFlux, AveE, outfile):
     fig1.savefig(outfile, dpi=600)
 
     exit()
-    
+
 #-----------------------------------------------------------------------------
-# 
+#
 #-----------------------------------------------------------------------------
 
 def plot_sph(mlts,mlats,efs0,ax,mini,maxi,nls,cmap):
@@ -358,7 +358,7 @@ def plot_sph(mlts,mlats,efs0,ax,mini,maxi,nls,cmap):
     return
 
 #-----------------------------------------------------------------------------
-# 
+#
 #-----------------------------------------------------------------------------
 
 def plot_car(mlts,mlats,efs0,ax,mini,maxi,nls,cmap):
@@ -392,7 +392,7 @@ def plot_car(mlts,mlats,efs0,ax,mini,maxi,nls,cmap):
     return
 
 #-----------------------------------------------------------------------------
-# 
+#
 #-----------------------------------------------------------------------------
 
 def get_factors_iaual_csv(AUs,ALs_n,
@@ -491,7 +491,7 @@ def get_factors_iaual_csv(AUs,ALs_n,
     return mlts0,mlats0,efs0
 
 #-----------------------------------------------------------------------------
-# 
+#
 #-----------------------------------------------------------------------------
 
 def calculate_hemispheric_power(mlats, mlts, eflux):
@@ -510,18 +510,43 @@ def calculate_hemispheric_power(mlats, mlts, eflux):
 
     return hp
 
+def limit_aual(au,al):
+
+
+    if al > -25:
+        al1 = -25
+    elif al < -1200:
+        al1 = -1200
+    else:
+        al1 = al
+
+    au1 = au
+    if au1 < 25:
+        au1 = 25
+    if au1 < 0.12 * abs(al1):
+        au1 = 0.12 * abs(al1)
+
+    if au1 > 400:
+        au1 = 400
+
+    return au1,al1
+
 #-----------------------------------------------------------------------------
-# 
+#
 #-----------------------------------------------------------------------------
 
 def load_fta_aual_csv(au,al,outfile):
 
+    # limit au&al
+    au_tmp,al_tmp = limit_aual(au,al)
+    print('au&al limited to:', au_tmp,al_tmp)
+
     bandtype='lbhl'
-    mlts0,mlats0,efs0 = get_factors_iaual_csv(au,al,bandtype,500)
+    mlts0,mlats0,efs0 = get_factors_iaual_csv(au_tmp,al_tmp,bandtype,500)
     mlts,mlats,lbhl_inp = interp_model(mlts0,mlats0,efs0)
 
     bandtype='lbhs'
-    mlts0,mlats0,efs0 = get_factors_iaual_csv(au,al,bandtype,500)
+    mlts0,mlats0,efs0 = get_factors_iaual_csv(au_tmp,al_tmp,bandtype,500)
     mlts,mlats,lbhs_inp = interp_model(mlts0,mlats0,efs0)
 
     eflux = lbhl_inp/110.0
@@ -540,8 +565,8 @@ def load_fta_aual_csv(au,al,outfile):
     cmap = mpl.cm.get_cmap("inferno")
 
     hp = calculate_hemispheric_power(mlats, mlts, eflux)
-    
-    # Plot the patterns:    
+
+    # Plot the patterns:
     ax=fig1.add_subplot(gs1[0,0])
     plot_car(mlts,mlats,efs,ax,mini,maxi,nls,cmap)
 
@@ -582,11 +607,11 @@ def load_fta_aual_csv(au,al,outfile):
         int(au),int(al)),dpi=600)
 
     plt.close()
-    
+
     return hp
 
 #-----------------------------------------------------------------------------
-# 
+#
 #-----------------------------------------------------------------------------
 
 def read_fre_data(NoaaFile):
@@ -612,7 +637,7 @@ def read_fre_data(NoaaFile):
     dMlt = 24.0 / nMlts
 
     nIndices = 10
-    
+
     mlts = np.arange(0, 24.0+dMlt, dMlt)
     lats = np.arange(MinLat, 90.0+dLat, dLat)
 
@@ -626,7 +651,7 @@ def read_fre_data(NoaaFile):
     for var in Vars:
         fpin.readline()
         print('Storing variable : '+var)
-        
+
         for index in np.arange(0, nIndices):
 
             for iLat in np.arange(0, nLats):
@@ -643,9 +668,9 @@ def read_fre_data(NoaaFile):
         eflux = fre['eFlux'][index]
         hp.append(calculate_hemispheric_power(lats2d, mlts2d, eflux))
     fre['hp'] = hp
-    
+
     return fre
-    
+
 # ----------------------------------------------------------------
 # Drive Fuller-Rowel and Evans Model
 # ----------------------------------------------------------------
@@ -658,19 +683,19 @@ def get_fre_patterns(ModelValues, hp):
             index = index+1
     if (index < 0):
         index = 0
-        
+
     ratio = hp / ModelValues['hp'][index]
 
     print('Adjusting FR&E pattern from ')
     print('  Model : ', ModelValues['hp'][index])
     print('  Input : ', hp)
     print('  Ratio : ', ratio)
-    
+
     AveE = ModelValues['AveE'][index,:,:]
     eFlux = ModelValues['eFlux'][index,:,:] * ratio
 
     return AveE, eFlux
-    
+
 # ----------------------------------------------------------------
 # Main code:
 # ----------------------------------------------------------------
@@ -684,7 +709,7 @@ if __name__ == '__main__':
     if (args["help"]):
 
         print('Usage : ')
-        print('fta_model_aual2.py -au=au -al=al -outfile=outfile.png')
+        print('fta_model_aual.py -au=au -al=al -outfile=outfile.png')
         print('   -help : print this message')
         print('   -au= upper auroral index (between 0 - 300 nT)')
         print('   -al= lower auroral index (below 0, ~0 -> -1000 nT)')
@@ -695,7 +720,7 @@ if __name__ == '__main__':
         print('   -fre : Use the Fuller-Rowell and Evans [1987] model')
         print('   -noaafile=file with fre values (default should work!!!)')
         print('   -hp= hemispheric power to drive F-R & E')
-    
+
     DataDir=args['indir']+'/' # put data directory here
     outdir='./' # output image directory here
 
@@ -709,7 +734,7 @@ if __name__ == '__main__':
         AveE, eFlux = get_fre_patterns(FreModelValues, args['hp'])
         outfile = 'fre_hp_{:03d}.png'.format(int(args['hp']))
         plot2x2(mlts2d, mlats2d, eFlux, AveE, outfile)
-        
+
     else:
         if (args['minal'] == args['maxal']):
             hp = load_fta_aual_csv(args['au'],args['al'],args['outfile'])
