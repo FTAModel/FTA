@@ -31,11 +31,6 @@ ALSplit=500.0
 # average energy outside of the oval (GITM uses 2.0 keV; nan masks it in plots)
 AveEFill=np.nan
 
-# how the 21 energy bins are put onto the MLat grid:
-#   'gitm'  : bin-average, then linearly fill empty bins (as in GITM)
-#   'numpy' : np.interp
-LatInterp='gitm'
-
 #-----------------------------------------------------------------------------
 #
 #-----------------------------------------------------------------------------
@@ -53,7 +48,6 @@ def get_args(argv):
     dal = 50.0
     noaafile = 'hpke.noaa'
     hp = 50.0
-    interp = LatInterp
 
     for arg in argv:
 
@@ -79,11 +73,6 @@ def get_args(argv):
             m = re.match(r'-hp=(.*)',arg)
             if m:
                 hp = float(m.group(1))
-                IsFound = 1
-
-            m = re.match(r'-interp=(.*)',arg)
-            if m:
-                interp = m.group(1)
                 IsFound = 1
 
             m = re.match(r'-au=(.*)',arg)
@@ -127,10 +116,6 @@ def get_args(argv):
                 fre = 1
                 IsFound = 1
 
-    if (interp not in ['gitm','numpy']):
-        print('-interp must be gitm or numpy, not : ',interp)
-        exit()
-
     if (minal > maxal):
         temp = minal
         minal = maxal
@@ -142,7 +127,6 @@ def get_args(argv):
             'dal':dal,
             'al':al,
             'hp':hp,
-            'interp':interp,
             'help':help,
             'fre':fre,
             'indir':indir,
@@ -155,7 +139,7 @@ def get_args(argv):
 #
 #-----------------------------------------------------------------------------
 
-def interp_model(mlts0,mlats0,efs0,interp=LatInterp):
+def interp_model(mlts0,mlats0,efs0):
 
     nMLTs = len(np.arange(BinMLT/2, 24, BinMLT))
     nMLats = len(np.arange(BinMLat/2+MinMLat, 90, BinMLat))
@@ -174,53 +158,30 @@ def interp_model(mlts0,mlats0,efs0,interp=LatInterp):
 
              mlats[:,ilat0]=ilat
 
-    nUnsorted = 0
+    # Put the 21 energy bins onto the MLat grid the same way GITM does
+    # (interp_to_lat_grid in ModFtaModel.f90), so the two agree exactly
 
     for k22, k2 in enumerate(np.arange(BinMLT/2, 24, BinMLT)):
 
         efs_tmp0 = efs0[k22,:]
         mlat_tmp0 = mlats0[k22,:]
 
-        if (interp == 'gitm'):
+        # average the energy bins that fall in each MLat bin:
+        for ilat0,ilat in enumerate(mlat_inp):
+            lc = ((mlat_tmp0 > ilat-BinMLat/2) &
+                  (mlat_tmp0 <= ilat+BinMLat/2))
+            if np.sum(lc) > 0:
+                efs[k22,ilat0] = np.mean(efs_tmp0[lc])
 
-            # average the energy bins that fall in each MLat bin:
-            for ilat0,ilat in enumerate(mlat_inp):
-                lc = ((mlat_tmp0 > ilat-BinMLat/2) &
-                      (mlat_tmp0 <= ilat+BinMLat/2))
-                if np.sum(lc) > 0:
-                    efs[k22,ilat0] = np.mean(efs_tmp0[lc])
-
-            # then linearly fill the empty MLat bins inside the oval:
-            idx = np.where(efs[k22,:] > 0)[0]
-            if len(idx)==0:
-                continue
-            for i in range(idx[0]+1, idx[-1]):
-                if efs[k22,i] == 0:
-                    ii = idx[idx > i][0]
-                    efs[k22,i] = (efs[k22,i-1]-efs[k22,ii])*(i-ii)/(i-1-ii) + \
-                        efs[k22,ii]
-
-        else:
-
-            lc = mlat_tmp0>0
-
-            if len(mlat_tmp0[lc])==0:
-                continue
-            mlat_tmp,efs_tmp = mlat_tmp0[lc],efs_tmp0[lc]
-
-            # np.interp needs increasing latitudes
-            if np.any(np.diff(mlat_tmp) < 0):
-                nUnsorted = nUnsorted + 1
-                srt = np.argsort(mlat_tmp)
-                mlat_tmp,efs_tmp = mlat_tmp[srt],efs_tmp[srt]
-
-            i0 = max(int((mlat_tmp[0]-MinMLat)//BinMLat), 0)
-            i1 = min(int((mlat_tmp[-1]-MinMLat)//BinMLat+1), nMLats)
-
-            efs[k22,i0:i1] = np.interp(mlat_inp[i0:i1], mlat_tmp, efs_tmp)
-
-    if (nUnsorted > 0):
-        print('  np.interp: sorted latitudes in ',nUnsorted,' MLT sectors')
+        # then linearly fill the empty MLat bins inside the oval:
+        idx = np.where(efs[k22,:] > 0)[0]
+        if len(idx)==0:
+            continue
+        for i in range(idx[0]+1, idx[-1]):
+            if efs[k22,i] == 0:
+                ii = idx[idx > i][0]
+                efs[k22,i] = (efs[k22,i-1]-efs[k22,ii])*(i-ii)/(i-1-ii) + \
+                    efs[k22,ii]
 
     return mlts,mlats,efs
 
@@ -690,7 +651,7 @@ def adjust_offset(mlts0, mlats0_l, mlats0_s, overlap):
 # Calculate the lbhl, lbhs, eflux, avee and polar cap patterns
 #-----------------------------------------------------------------------------
 
-def calc_fta_aual(au,al,interp=LatInterp):
+def calc_fta_aual(au,al):
 
     # limit au&al
     au_tmp,al_tmp = limit_aual(au,al)
@@ -716,8 +677,8 @@ def calc_fta_aual(au,al,interp=LatInterp):
     if overlap.any():
         mlats0_l,mlats0_s = adjust_offset(mlts0,mlats0_l,mlats0_s,overlap)
 
-    mlts,mlats,lbhl_inp = interp_model(mlts0,mlats0_l,efs0_l,interp)
-    mlts,mlats,lbhs_inp = interp_model(mlts0,mlats0_s,efs0_s,interp)
+    mlts,mlats,lbhl_inp = interp_model(mlts0,mlats0_l,efs0_l)
+    mlts,mlats,lbhs_inp = interp_model(mlts0,mlats0_s,efs0_s)
 
     # polar cap is poleward of the lbhs poleward boundary
     polarcap = (mlats > mlats0_s[:,-1:]) * 1.0
@@ -737,9 +698,9 @@ def calc_fta_aual(au,al,interp=LatInterp):
 #
 #-----------------------------------------------------------------------------
 
-def load_fta_aual(au,al,outfile,interp=LatInterp):
+def load_fta_aual(au,al,outfile):
 
-    fta = calc_fta_aual(au,al,interp)
+    fta = calc_fta_aual(au,al)
     mlts,mlats = fta['mlts'],fta['mlats']
     eflux,avee = fta['eflux'],fta['avee']
 
@@ -910,8 +871,6 @@ if __name__ == '__main__':
         print('   -maxal=AL         : max AL to sweep through (default: the -al value)')
         print('   -dal=DAL          : delta AL to sweep min-max AL with'
               ' (default: {:g})'.format(d['dal']))
-        print('   -interp=METHOD    : gitm or numpy, how energy bins go onto the'
-              ' MLat grid (default: {})'.format(d['interp']))
         print('   -outfile=NAME     : output file name; _AU_AL.png is added'
               ' (default: {})'.format(d['outfile']))
         print('   -indir=DIR        : directory where input files are stored'
@@ -939,13 +898,13 @@ if __name__ == '__main__':
 
     else:
         if (args['minal'] == args['maxal']):
-            hp = load_fta_aual(args['au'],args['al'],args['outfile'],args['interp'])
+            hp = load_fta_aual(args['au'],args['al'],args['outfile'])
             print('Hemispheric Power : ',hp,' GW')
         else:
             AllHp = []
             AllAl = []
             for al in np.arange(args['minal'],args['maxal'],args['dal']):
-                AllHp.append(load_fta_aual(args['au'],al,args['outfile'],args['interp']))
+                AllHp.append(load_fta_aual(args['au'],al,args['outfile']))
                 AllAl.append(al)
 
             fig = plt.figure(1,figsize=(6,9))

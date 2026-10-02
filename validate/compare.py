@@ -30,7 +30,7 @@ for au, al in np.loadtxt('points.txt'):
 
     # (quietly: the limiter prints when it changes AU or AL)
     with contextlib.redirect_stdout(io.StringIO()):
-        python = fta.calc_fta_aual(au, al, 'gitm')
+        python = fta.calc_fta_aual(au, al)
 
     line = '{:5.0f} {:6.0f}  limited to {:6.1f} {:7.1f} (fortran {:6.1f} {:7.1f})'.format(
         au, al, python['au'], python['al'], au_f, al_f)
