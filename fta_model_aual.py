@@ -3,9 +3,13 @@
 # Copyright 2021, the University of Michigan
 # Full license can be found in LICENSE
 
+# The AU/AL model here is kept in step with GITM's Fortran version,
+# GITMCode/Electrodynamics src/ModFtaModel.f90
+# Last synced at 756d8cb (2026-07-25).
+# To compare the two, see validate/README.md.
+
 import numpy as np
 import matplotlib.pyplot as plt
-import pandas as pd
 import matplotlib.cm as cm
 import matplotlib as mpl
 import re
@@ -13,6 +17,24 @@ import sys
 
 # fix 96 MLT bin
 BinMLT=0.25
+
+# fix 0.5 deg MLat bins from MinMLat to 90 (same grid as GITM's ModFtaModel.f90)
+BinMLat=0.5
+MinMLat=30.0
+
+# lowest MLat shown in the plots
+PlotMinMLat=50.0
+
+# |AL| above which the second (log_4p) fit is used
+ALSplit=500.0
+
+# average energy outside of the oval (GITM uses 2.0 keV; nan masks it in plots)
+AveEFill=np.nan
+
+# how the 21 energy bins are put onto the MLat grid:
+#   'gitm'  : bin-average, then linearly fill empty bins (as in GITM)
+#   'numpy' : np.interp
+LatInterp='gitm'
 
 #-----------------------------------------------------------------------------
 #
@@ -31,6 +53,7 @@ def get_args(argv):
     dal = 50.0
     noaafile = 'hpke.noaa'
     hp = 50.0
+    interp = LatInterp
 
     for arg in argv:
 
@@ -58,6 +81,11 @@ def get_args(argv):
                 hp = float(m.group(1))
                 IsFound = 1
 
+            m = re.match(r'-interp=(.*)',arg)
+            if m:
+                interp = m.group(1)
+                IsFound = 1
+
             m = re.match(r'-au=(.*)',arg)
             if m:
                 au = float(m.group(1))
@@ -79,17 +107,17 @@ def get_args(argv):
             if m:
                 minal = float(m.group(1))
                 if (minal > 0.0):
-                    minal = -al
+                    minal = -minal
                 IsFound = 1
 
             m = re.match(r'-maxal=(.*)',arg)
             if m:
                 maxal = float(m.group(1))
                 if (maxal > 0.0):
-                    maxal = -al
+                    maxal = -maxal
                 IsFound = 1
 
-            m = re.match(r'-help',arg)
+            m = re.match(r'(-h|-help|--help)$',arg)
             if m:
                 help = 1
                 IsFound = 1
@@ -98,6 +126,10 @@ def get_args(argv):
             if m:
                 fre = 1
                 IsFound = 1
+
+    if (interp not in ['gitm','numpy']):
+        print('-interp must be gitm or numpy, not : ',interp)
+        exit()
 
     if (minal > maxal):
         temp = minal
@@ -110,6 +142,7 @@ def get_args(argv):
             'dal':dal,
             'al':al,
             'hp':hp,
+            'interp':interp,
             'help':help,
             'fre':fre,
             'indir':indir,
@@ -122,44 +155,72 @@ def get_args(argv):
 #
 #-----------------------------------------------------------------------------
 
-def interp_model(mlts0,mlats0,efs0):
+def interp_model(mlts0,mlats0,efs0,interp=LatInterp):
 
-    BinMLat = 0.5
     nMLTs = len(np.arange(BinMLT/2, 24, BinMLT))
-    nMLats = len(np.arange(BinMLat/2+50.0, 90, BinMLat))
+    nMLats = len(np.arange(BinMLat/2+MinMLat, 90, BinMLat))
     nLevs = 21
     mlats = np.zeros((nMLTs,nMLats))
     mlts = np.zeros((nMLTs,nMLats))
     efs = np.zeros((nMLTs,nMLats))
 
-    mlat_inp = np.arange(50.0+BinMLat/2, 90, BinMLat)
+    mlat_inp = np.arange(MinMLat+BinMLat/2, 90, BinMLat)
 
     for k22, k2 in enumerate(np.arange(BinMLT/2, 24, BinMLT)):
 
         mlts[k22,:] = k2
 
-        for ilat0,ilat in enumerate(np.arange(BinMLat/2.0+50, 90, BinMLat)):
+        for ilat0,ilat in enumerate(np.arange(BinMLat/2.0+MinMLat, 90, BinMLat)):
 
              mlats[:,ilat0]=ilat
+
+    nUnsorted = 0
 
     for k22, k2 in enumerate(np.arange(BinMLT/2, 24, BinMLT)):
 
         efs_tmp0 = efs0[k22,:]
         mlat_tmp0 = mlats0[k22,:]
 
-        lc = mlat_tmp0>0
+        if (interp == 'gitm'):
 
-        if len(mlat_tmp0[lc])==0:
-            continue
-        mlat_tmp,efs_tmp = mlat_tmp0[lc],efs_tmp0[lc]
+            # average the energy bins that fall in each MLat bin:
+            for ilat0,ilat in enumerate(mlat_inp):
+                lc = ((mlat_tmp0 > ilat-BinMLat/2) &
+                      (mlat_tmp0 <= ilat+BinMLat/2))
+                if np.sum(lc) > 0:
+                    efs[k22,ilat0] = np.mean(efs_tmp0[lc])
 
-        mlat_inp1= mlat_inp[int((mlat_tmp[0]-50)//BinMLat):
-                int((mlat_tmp[-1]-50)//BinMLat+1)]
+            # then linearly fill the empty MLat bins inside the oval:
+            idx = np.where(efs[k22,:] > 0)[0]
+            if len(idx)==0:
+                continue
+            for i in range(idx[0]+1, idx[-1]):
+                if efs[k22,i] == 0:
+                    ii = idx[idx > i][0]
+                    efs[k22,i] = (efs[k22,i-1]-efs[k22,ii])*(i-ii)/(i-1-ii) + \
+                        efs[k22,ii]
 
-        efs_inp = np.interp(mlat_inp1, mlat_tmp, efs_tmp)
+        else:
 
-        efs[k22,int((mlat_tmp[0]-50)//BinMLat):
-                int((mlat_tmp[-1]-50)//BinMLat+1)] = efs_inp
+            lc = mlat_tmp0>0
+
+            if len(mlat_tmp0[lc])==0:
+                continue
+            mlat_tmp,efs_tmp = mlat_tmp0[lc],efs_tmp0[lc]
+
+            # np.interp needs increasing latitudes
+            if np.any(np.diff(mlat_tmp) < 0):
+                nUnsorted = nUnsorted + 1
+                srt = np.argsort(mlat_tmp)
+                mlat_tmp,efs_tmp = mlat_tmp[srt],efs_tmp[srt]
+
+            i0 = max(int((mlat_tmp[0]-MinMLat)//BinMLat), 0)
+            i1 = min(int((mlat_tmp[-1]-MinMLat)//BinMLat+1), nMLats)
+
+            efs[k22,i0:i1] = np.interp(mlat_inp[i0:i1], mlat_tmp, efs_tmp)
+
+    if (nUnsorted > 0):
+        print('  np.interp: sorted latitudes in ',nUnsorted,' MLT sectors')
 
     return mlts,mlats,efs
 
@@ -169,19 +230,19 @@ def interp_model(mlts0,mlats0,efs0):
 
 def cal_avee(efs_lbhl,efs_lbhs):
 
-    nMLTs = 96
-    nMLats = 80
-    ratio = np.ones((nMLTs,nMLats))*np.nan
-    avee = np.ones((nMLTs,nMLats))*np.nan
-
-    loc = (efs_lbhs>=1.0)&(efs_lbhl>=1.0)
-    tmp = efs_lbhl[loc]/efs_lbhs[loc]
-    ratio[loc] = tmp
+    ratio = np.ones(efs_lbhl.shape)*np.nan
+    avee = np.ones(efs_lbhl.shape)*AveEFill
 
     # Germay et al.(1994) ratio -> energy flux
     a = 0.09193196
     b = 19.73989114
     c = 0.5446197
+
+    loc = (efs_lbhs>1.0)&(efs_lbhl>1.0)
+    tmp = efs_lbhl[loc]/efs_lbhs[loc]
+    ratio[loc] = tmp
+    loc = loc & (ratio > c)
+
     avee[loc] = 10**(
             np.log((ratio[loc]-c)/a)/np.log(b))
     return avee
@@ -254,11 +315,11 @@ def plot2x2(mlts2d, mlats2d, eFlux, AveE, outfile):
     #hp = inputs['hp']
 
     plt.style.use('default')
-    cmap = mpl.cm.get_cmap("inferno")
+    cmap = mpl.colormaps["inferno"]
     fig1 = plt.figure(1)
     gs1 = fig1.add_gridspec(2,2)
     plt.subplots_adjust(wspace = 0.08,hspace = 0.15)
-    cmap = mpl.cm.get_cmap("inferno")
+    cmap = mpl.colormaps["inferno"]
 
     # EFlux First:
 
@@ -321,7 +382,7 @@ def plot2x2(mlts2d, mlats2d, eFlux, AveE, outfile):
 
 def plot_sph(mlts,mlats,efs0,ax,mini,maxi,nls,cmap):
 
-    efs=np.zeros((96,80))
+    efs=np.zeros(efs0.shape)
     efs[efs0==efs0] = efs0[efs0==efs0]
 
     theta = mlts*15.0*np.pi/180.0-np.pi/2
@@ -346,13 +407,13 @@ def plot_sph(mlts,mlats,efs0,ax,mini,maxi,nls,cmap):
     #        edgecolors='m',
     #        marker = '^',alpha = 0.8)
 
-    levels = [0,10,20,30,40]
-    ax.set_rmax((40.0))
+    levels = list(np.arange(0,90-PlotMinMLat+1,10))
+    ax.set_rmax((90-PlotMinMLat))
     ax.set_rlabel_position(22.5)
     ax.set_xticks(np.arange(0,np.pi*2,np.pi/4))
     ax.set_xticklabels(['', '', '12', '', '18', '', '',''])
     ax.set_rticks(levels)
-    ax.set_yticklabels(['','','','','50\xb0'])
+    ax.set_yticklabels(['']*(len(levels)-1)+['{:2d}\xb0'.format(int(90-levels[-1]))])
     ax.grid(True,linestyle='--')
 
     return
@@ -363,7 +424,7 @@ def plot_sph(mlts,mlats,efs0,ax,mini,maxi,nls,cmap):
 
 def plot_car(mlts,mlats,efs0,ax,mini,maxi,nls,cmap):
 
-    efs=np.zeros((96,80))
+    efs=np.zeros(efs0.shape)
     efs[efs0==efs0] = efs0[efs0==efs0]
 
     theta_d = (mlts+12)%24
@@ -377,11 +438,9 @@ def plot_car(mlts,mlats,efs0,ax,mini,maxi,nls,cmap):
             alpha=0.85)
 
     ax.set_xlim(0,24)
-    ax.set_ylim(50,90)
+    ax.set_ylim(PlotMinMLat,90)
     ax.set_xticks(np.arange(0,24,6))
-    ax.set_yticks(np.arange(50,90,5))
-    #ax.set_yticklabels(['','','','',''])
-    ax.set_yticklabels(['50','','60','','70','','80',''])
+    ax.set_yticks(np.arange(PlotMinMLat,90,5))
     #ax.yaxis.set_tick_params(pad=0.1)
     #ax.tick_params(axis='y',length=0)
     ax.set_xticklabels(['12','18','24','06'])
@@ -395,35 +454,35 @@ def plot_car(mlts,mlats,efs0,ax,mini,maxi,nls,cmap):
 #
 #-----------------------------------------------------------------------------
 
-def get_factors_iaual_csv(AUs,ALs_n,
+def get_factors_iaual(AUs,ALs_n,
         emis_type,al0):
 
     ALs = -ALs_n
 
     forder,param = 'r1','k_k'
-    ifile = (DataDir+'fit_coef_21bins_'+emis_type+'_'+forder+'_'+param+'.csv')
-    k_k = pd.read_csv(ifile)
+    ifile = (DataDir+'fit_coef_21bins_'+emis_type+'_'+forder+'_'+param+'.txt')
+    k_k = np.loadtxt(ifile)
 
     forder,param = 'r1','k_b'
-    ifile = (DataDir+'fit_coef_21bins_'+emis_type+'_'+forder+'_'+param+'.csv')
-    k_b = pd.read_csv(ifile)
+    ifile = (DataDir+'fit_coef_21bins_'+emis_type+'_'+forder+'_'+param+'.txt')
+    k_b = np.loadtxt(ifile)
 
     forder,param = 'r1','b_k'
-    ifile = (DataDir+'fit_coef_21bins_'+emis_type+'_'+forder+'_'+param+'.csv')
-    b_k = pd.read_csv(ifile)
+    ifile = (DataDir+'fit_coef_21bins_'+emis_type+'_'+forder+'_'+param+'.txt')
+    b_k = np.loadtxt(ifile)
 
     forder,param = 'r1','b_b'
-    ifile = (DataDir+'fit_coef_21bins_'+emis_type+'_'+forder+'_'+param+'.csv')
-    b_b = pd.read_csv(ifile)
+    ifile = (DataDir+'fit_coef_21bins_'+emis_type+'_'+forder+'_'+param+'.txt')
+    b_b = np.loadtxt(ifile)
 
 
     forder,param = 'r2','k_k'
-    ifile = (DataDir+'fit_coef_21bins_'+emis_type+'_'+forder+'_'+param+'.csv')
-    k_k2 = pd.read_csv(ifile)
+    ifile = (DataDir+'fit_coef_21bins_'+emis_type+'_'+forder+'_'+param+'_log_4p.txt')
+    k_k2 = np.loadtxt(ifile)
 
     forder,param = 'r2','k_b'
-    ifile = (DataDir+'fit_coef_21bins_'+emis_type+'_'+forder+'_'+param+'.csv')
-    k_b2 = pd.read_csv(ifile)
+    ifile = (DataDir+'fit_coef_21bins_'+emis_type+'_'+forder+'_'+param+'_log_4p.txt')
+    k_b2 = np.loadtxt(ifile)
 
     MLTs = np.arange(BinMLT/2, 24, BinMLT)
     nMLTs = len(MLTs)
@@ -438,25 +497,24 @@ def get_factors_iaual_csv(AUs,ALs_n,
 
         mlts0[k11,:]=k1
 
-    kk_lat = np.asarray(k_k.iloc[:,np.arange(1,42,2)])
-    kb_lat = np.asarray(k_b.iloc[:,np.arange(1,42,2)])
-    bk_lat = np.asarray(b_k.iloc[:,np.arange(1,42,2)])
-    bb_lat = np.asarray(b_b.iloc[:,np.arange(1,42,2)])
+    kk_lat = np.asarray(k_k[:,np.arange(1,42,2)])
+    kb_lat = np.asarray(k_b[:,np.arange(1,42,2)])
+    bk_lat = np.asarray(b_k[:,np.arange(1,42,2)])
+    bb_lat = np.asarray(b_b[:,np.arange(1,42,2)])
 
-    kk_ef = np.asarray(k_k.iloc[:,np.arange(2,43,2)])
-    kb_ef = np.asarray(k_b.iloc[:,np.arange(2,43,2)])
-    bk_ef = np.asarray(b_k.iloc[:,np.arange(2,43,2)])
-    bb_ef = np.asarray(b_b.iloc[:,np.arange(2,43,2)])
+    kk_ef = np.asarray(k_k[:,np.arange(2,43,2)])
+    kb_ef = np.asarray(k_b[:,np.arange(2,43,2)])
+    bk_ef = np.asarray(b_k[:,np.arange(2,43,2)])
+    bb_ef = np.asarray(b_b[:,np.arange(2,43,2)])
 
-    kk_lat2 = np.asarray(k_k2.iloc[:,np.arange(1,42,2)])
-    kb_lat2 = np.asarray(k_b2.iloc[:,np.arange(1,42,2)])
+    kk_lat2 = np.asarray(k_k2[:,np.arange(1,42,2)])
+    kb_lat2 = np.asarray(k_b2[:,np.arange(1,42,2)])
 
-    kk_ef2  = np.asarray(k_k2.iloc[:,np.arange(2,43,2)])
-    kb_ef2  = np.asarray(k_b2.iloc[:,np.arange(2,43,2)])
+    kk_ef2  = np.asarray(k_k2[:,np.arange(2,43,2)])
+    kb_ef2  = np.asarray(k_b2[:,np.arange(2,43,2)])
 
-    if (ALs <= al0):
+    if (ALs < al0):
 
-        print('interpolate...')
         cf_b_lat = bb_lat+bk_lat*AUs
         cf_k_lat = kb_lat+kk_lat*np.log(AUs)
 
@@ -467,7 +525,6 @@ def get_factors_iaual_csv(AUs,ALs_n,
         ef_p   = cf_b_ef + cf_k_ef * ALs
 
     else:
-        print('extrapolate...')
         # extrapolation
         cf_b_lat = bb_lat+bk_lat*AUs
         cf_k_lat = kb_lat+kk_lat*np.log(AUs)
@@ -479,8 +536,9 @@ def get_factors_iaual_csv(AUs,ALs_n,
         ef_b0   = cf_b_ef + cf_k_ef * al0
 
         #
-        cf_k_lat2 = kb_lat2+kk_lat2*AUs
-        cf_k_ef2  = kb_ef2 +kk_ef2 *AUs
+        cf_k_lat2 = kb_lat2+kk_lat2*np.log(AUs)
+        cf_k_ef2  = kb_ef2 +kk_ef2 *np.log(AUs)
+        cf_k_ef2[cf_k_ef2 < 0] = 0.0
 
         mlat_p = mlat_b0 + cf_k_lat2 * (ALs-al0)
         ef_p   = ef_b0   + cf_k_ef2 * (ALs-al0)
@@ -510,47 +568,180 @@ def calculate_hemispheric_power(mlats, mlts, eflux):
 
     return hp
 
+def limit_al_lower(au):
+
+    # most negative AL allowed for a given AU (from GITM's ModFtaModel.f90)
+
+    if au < 150.0:
+        a = -7.89e-06
+        b = -0.0952
+        c = -66.0
+        al = (-np.sqrt(b**2 - 4.0*(c - au)*a) - b)/(2.0*a) + 10.0
+
+    elif au <= 175.0:
+        al1 = -3100.0
+        al2 = -3025.0
+        al = (al2 - al1)/(175.0 - 150.0)*(au - 150.0) + al1 + 10.0
+
+    elif au <= 300.0:
+        coef1 = 0.18503781
+        coef2 = 2.37717756
+        au_ = (au - 175.0)/125.0
+        al = np.arcsinh(au_/coef1)/coef2 * 1275.0 - 3010.0
+
+    elif au <= 575.0:
+        coef1 = 0.27380323
+        coef2 = 2.0135317
+        au_ = (au - 325.0)/250.0
+        al = np.arcsinh(au_/coef1)/coef2 * 300.0 - 1580.0
+
+    elif au <= 775.0:
+        al = (au - 1290.0)/0.5573
+
+    else:
+        al = (au - 1430.0)/0.689
+
+    return al
+
+def limit_al_upper(au):
+
+    # least negative AL allowed for a given AU > 750 (from GITM's ModFtaModel.f90)
+
+    return (au - 724.0)/(-0.682)
+
 def limit_aual(au,al):
 
-
-    if al > -25:
-        al1 = -25
-    elif al < -1200:
-        al1 = -1200
-    else:
-        al1 = al
-
     au1 = au
+    if au1 > 1050:
+        au1 = 1050.0
     if au1 < 25:
-        au1 = 25
-    if au1 < 0.12 * abs(al1):
-        au1 = 0.12 * abs(al1)
+        au1 = 25.0
 
-    if au1 > 400:
-        au1 = 400
+    al1 = al
+    al_lower = limit_al_lower(au1)
+    if al1 < al_lower:
+        al1 = al_lower
+
+    if au1 > 750:
+        al_upper = limit_al_upper(au1)
+        if al1 > al_upper:
+            al1 = al_upper
 
     return au1,al1
+
+#-----------------------------------------------------------------------------
+# Make sure that each band is at least 0.25 deg wide, with the energy bins
+# at least 0.25/20 deg apart (otherwise the band can have negative width)
+#-----------------------------------------------------------------------------
+
+def adjust_width(mlats0):
+
+    nLevs = mlats0.shape[1]
+    dMin = 0.25/20.0
+    loc = (mlats0[:,-1] - mlats0[:,0]) < 0.25
+
+    for k11 in np.where(loc)[0]:
+        for k22 in range(nLevs-1):
+            if (mlats0[k11,k22+1] - mlats0[k11,k22]) < dMin:
+                mlats0[k11,k22+1] = mlats0[k11,k22] + dMin
+
+    return mlats0
+
+#-----------------------------------------------------------------------------
+# Where the lbhl and lbhs bands overlap in MLT, move both onto common
+# equatorward and poleward boundaries, blending in from the edges of the
+# overlap. Each band is stretched between the new boundaries.
+#-----------------------------------------------------------------------------
+
+def adjust_offset(mlts0, mlats0_l, mlats0_s, overlap):
+
+    mlts = mlts0[:,0]
+
+    gap1 = np.min(mlts[overlap]) - BinMLT
+    gap3 = np.max(mlts[overlap]) + BinMLT
+    gap2 = (gap1 + gap3)*0.5
+
+    wght = np.zeros(len(mlts))
+    loc = (mlts > gap1) & (mlts <= gap2)
+    wght[loc] = (mlts[loc] - gap1)/(gap2 - gap1)*0.5
+    loc = (mlts > gap2) & (mlts < gap3)
+    wght[loc] = (1 - (mlts[loc] - gap2)/(gap3 - gap2))*0.5
+
+    eb = mlats0_s[:,0]*wght + mlats0_l[:,0]*(1.0 - wght)
+    pb = mlats0_s[:,-1]*wght + mlats0_l[:,-1]*(1.0 - wght)
+    width_s = mlats0_s[:,-1] - mlats0_s[:,0]
+    width_l = mlats0_l[:,-1] - mlats0_l[:,0]
+
+    loc = (mlts > gap1) & (mlts < gap3)
+
+    for k11 in np.where(loc)[0]:
+        mlats0_s[k11,1:-1] = (mlats0_s[k11,1:-1] - mlats0_s[k11,0]) * \
+            (pb[k11] - eb[k11])/width_s[k11] + eb[k11]
+        mlats0_l[k11,1:-1] = (mlats0_l[k11,1:-1] - mlats0_l[k11,0]) * \
+            (pb[k11] - eb[k11])/width_l[k11] + eb[k11]
+        mlats0_s[k11,0] = eb[k11]
+        mlats0_s[k11,-1] = pb[k11]
+        mlats0_l[k11,0] = eb[k11]
+        mlats0_l[k11,-1] = pb[k11]
+
+    return mlats0_l, mlats0_s
+
+#-----------------------------------------------------------------------------
+# Calculate the lbhl, lbhs, eflux, avee and polar cap patterns
+#-----------------------------------------------------------------------------
+
+def calc_fta_aual(au,al,interp=LatInterp):
+
+    # limit au&al
+    au_tmp,al_tmp = limit_aual(au,al)
+    if (au_tmp != au) or (al_tmp != al):
+        print('au&al limited to:', au_tmp,al_tmp)
+
+    bandtype='lbhl'
+    mlts0,mlats0_l,efs0_l = get_factors_iaual(au_tmp,al_tmp,bandtype,ALSplit)
+
+    bandtype='lbhs'
+    mlts0,mlats0_s,efs0_s = get_factors_iaual(au_tmp,al_tmp,bandtype,ALSplit)
+
+    mlats0_l = adjust_width(mlats0_l)
+    mlats0_s = adjust_width(mlats0_s)
+
+    # lbhs equatorward boundary poleward of the lbhl poleward boundary:
+    overlap = (mlats0_s[:,0] - mlats0_l[:,-1]) >= -0.25/20.0
+    if overlap.any():
+        mlats0_l,mlats0_s = adjust_offset(mlts0,mlats0_l,mlats0_s,overlap)
+
+    # lbhl equatorward boundary poleward of the lbhs poleward boundary:
+    overlap = (mlats0_l[:,0] - mlats0_s[:,-1]) >= -0.25/20.0
+    if overlap.any():
+        mlats0_l,mlats0_s = adjust_offset(mlts0,mlats0_l,mlats0_s,overlap)
+
+    mlts,mlats,lbhl_inp = interp_model(mlts0,mlats0_l,efs0_l,interp)
+    mlts,mlats,lbhs_inp = interp_model(mlts0,mlats0_s,efs0_s,interp)
+
+    # polar cap is poleward of the lbhs poleward boundary
+    polarcap = (mlats > mlats0_s[:,-1:]) * 1.0
+
+    eflux = lbhl_inp/110.0
+    avee = cal_avee(lbhl_inp,lbhs_inp)
+
+    fta = {'mlts':mlts, 'mlats':mlats,
+           'lbhl':lbhl_inp, 'lbhs':lbhs_inp,
+           'eflux':eflux, 'avee':avee, 'polarcap':polarcap,
+           'au':au_tmp, 'al':al_tmp, 'ae':au_tmp-al_tmp,
+           'limited':(au_tmp != au) or (al_tmp != al)}
+
+    return fta
 
 #-----------------------------------------------------------------------------
 #
 #-----------------------------------------------------------------------------
 
-def load_fta_aual_csv(au,al,outfile):
+def load_fta_aual(au,al,outfile,interp=LatInterp):
 
-    # limit au&al
-    au_tmp,al_tmp = limit_aual(au,al)
-    print('au&al limited to:', au_tmp,al_tmp)
-
-    bandtype='lbhl'
-    mlts0,mlats0,efs0 = get_factors_iaual_csv(au_tmp,al_tmp,bandtype,500)
-    mlts,mlats,lbhl_inp = interp_model(mlts0,mlats0,efs0)
-
-    bandtype='lbhs'
-    mlts0,mlats0,efs0 = get_factors_iaual_csv(au_tmp,al_tmp,bandtype,500)
-    mlts,mlats,lbhs_inp = interp_model(mlts0,mlats0,efs0)
-
-    eflux = lbhl_inp/110.0
-    avee = cal_avee(lbhl_inp,lbhs_inp)
+    fta = calc_fta_aual(au,al,interp)
+    mlts,mlats = fta['mlts'],fta['mlats']
+    eflux,avee = fta['eflux'],fta['avee']
 
     efs = eflux
     mini = 0
@@ -558,11 +749,11 @@ def load_fta_aual_csv(au,al,outfile):
     nls = int(maxi)
 
     plt.style.use('default')
-    cmap = mpl.cm.get_cmap("inferno")
+    cmap = mpl.colormaps["inferno"]
     fig1 = plt.figure(1)
     gs1 = fig1.add_gridspec(2,2)
     plt.subplots_adjust(wspace = 0.08,hspace = 0.15)
-    cmap = mpl.cm.get_cmap("inferno")
+    cmap = mpl.colormaps["inferno"]
 
     hp = calculate_hemispheric_power(mlats, mlts, eflux)
 
@@ -659,7 +850,7 @@ def read_fre_data(NoaaFile):
                 line2 = fpin.readline().strip()
                 line = line1 + '  ' + line2
                 line = line.split()
-                vals = np.array(line).astype(np.float)
+                vals = np.array(line).astype(float)
                 fre[var][index, iLat, 0:nMlts] = vals * scale
                 fre[var][index, iLat, nMlts] = fre[var][index, iLat, 0]
 
@@ -708,18 +899,29 @@ if __name__ == '__main__':
 
     if (args["help"]):
 
-        print('Usage : ')
-        print('fta_model_aual.py -au=au -al=al -outfile=outfile.png')
-        print('   -help : print this message')
-        print('   -au= upper auroral index (between 0 - 300 nT)')
-        print('   -al= lower auroral index (below 0, ~0 -> -1000 nT)')
-        print('   -outfile=output file name (au, al, .png is added!)')
-        print('   -indir=directory where input files are stored')
-        print('   -minal,-maxal=min/max AL to sweep through')
-        print('   -dal=delta AL to use to sweep through min-max AL')
-        print('   -fre : Use the Fuller-Rowell and Evans [1987] model')
-        print('   -noaafile=file with fre values (default should work!!!)')
-        print('   -hp= hemispheric power to drive F-R & E')
+        d = get_args([])
+        print('Usage : fta_model_aual.py [options]')
+        print('   -h, -help, --help : print this message')
+        print('   -au=AU            : upper auroral index, nT; limited to 25 - 1050'
+              ' (default: {:g})'.format(d['au']))
+        print('   -al=AL            : lower auroral index, nT; limited by an'
+              ' AU-dependent range (default: {:g})'.format(d['al']))
+        print('   -minal=AL         : min AL to sweep through (default: the -al value)')
+        print('   -maxal=AL         : max AL to sweep through (default: the -al value)')
+        print('   -dal=DAL          : delta AL to sweep min-max AL with'
+              ' (default: {:g})'.format(d['dal']))
+        print('   -interp=METHOD    : gitm or numpy, how energy bins go onto the'
+              ' MLat grid (default: {})'.format(d['interp']))
+        print('   -outfile=NAME     : output file name; _AU_AL.png is added'
+              ' (default: {})'.format(d['outfile']))
+        print('   -indir=DIR        : directory where input files are stored'
+              ' (default: {})'.format(d['indir']))
+        print('   -fre              : use the Fuller-Rowell and Evans [1987] model')
+        print('   -hp=HP            : hemispheric power, GW, to drive FR&E'
+              ' (default: {:g})'.format(d['hp']))
+        print('   -noaafile=FILE    : file with FR&E values, in -indir'
+              ' (default: {})'.format(d['noaafile']))
+        exit()
 
     DataDir=args['indir']+'/' # put data directory here
     outdir='./' # output image directory here
@@ -737,13 +939,13 @@ if __name__ == '__main__':
 
     else:
         if (args['minal'] == args['maxal']):
-            hp = load_fta_aual_csv(args['au'],args['al'],args['outfile'])
+            hp = load_fta_aual(args['au'],args['al'],args['outfile'],args['interp'])
             print('Hemispheric Power : ',hp,' GW')
         else:
             AllHp = []
             AllAl = []
             for al in np.arange(args['minal'],args['maxal'],args['dal']):
-                AllHp.append(load_fta_aual_csv(args['au'],al,args['outfile']))
+                AllHp.append(load_fta_aual(args['au'],al,args['outfile'],args['interp']))
                 AllAl.append(al)
 
             fig = plt.figure(1,figsize=(6,9))
